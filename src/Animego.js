@@ -283,6 +283,8 @@ const stream = async (url, player, translation) => {
 
     await sleep(500);
 
+    await page.$eval('.overlay-censored', el => el.remove());
+
     let playButton = await frame.$(".vjs-big-play-button");
     if (!playButton) {
         playButton = await frame.$(".play_button");
