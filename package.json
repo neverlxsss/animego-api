@@ -1,0 +1,13 @@
+{
+  "name": "animego-api",
+  "version": "1.0.0",
+  "description": "parse info and stream from animego",
+  "main": "index.js",
+  "author": "sanin.tony.dev@gmail.com",
+  "license": "ISC",
+  "dependencies": {
+    "axios": "^1.6.5",
+    "node-html-parser": "^6.1.12",
+    "puppeteer": "^21.7.0"
+  }
+}
