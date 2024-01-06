@@ -1,4 +1,4 @@
-const { search, info, streamInfo, stream } = require('./Animego');
+const { search, info, streamInfo, stream } = require('./src/Animego');
 
 module.exports = {
     search,
