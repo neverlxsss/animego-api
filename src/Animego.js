@@ -1,6 +1,7 @@
 const axios = require('axios');
 const nodeHtmlParser = require('node-html-parser');
-const {launch} = require("puppeteer");
+const puppeteer = require("puppeteer-core")
+const chromium = require("@sparticuz/chromium")
 
 const baseUrl = "https://animego.org";
 
@@ -92,7 +93,19 @@ const info = async (url) => {
 }
 
 const streamInfo = async (url) => {
-    const browser = await launch({headless: true});
+    const browser = await puppeteer.launch({
+        executablePath:
+            process.env.CHROME_EXECUTABLE_PATH || (await chromium.executablePath()),
+        headless: true,
+        args: [
+            "--no-sandbox",
+            "--disable-setuid-sandbox",
+            "--disable-dev-shm-usage",
+            "--single-process",
+        ],
+        ignoreDefaultArgs: ["--disable-extensions"],
+        ignoreHTTPSErrors: true,
+    });
     const page = await browser.newPage();
 
     // Set screen size
@@ -131,7 +144,19 @@ const streamInfo = async (url) => {
 }
 
 const stream = async (url, player, translation) => {
-    const browser = await launch({headless: true});
+    const browser = await puppeteer.launch({
+        executablePath:
+            process.env.CHROME_EXECUTABLE_PATH || (await chromium.executablePath()),
+        headless: true,
+        args: [
+            "--no-sandbox",
+            "--disable-setuid-sandbox",
+            "--disable-dev-shm-usage",
+            "--single-process",
+        ],
+        ignoreDefaultArgs: ["--disable-extensions"],
+        ignoreHTTPSErrors: true,
+    });
     const page = await browser.newPage();
     let stream = null;
 
@@ -165,17 +190,30 @@ const stream = async (url, player, translation) => {
         return document.readyState === "complete" && !document.getElementById('loader-loading-player');
     });
 
+    const players = await page.evaluate(() => {
+        let players = [];
+        document.getElementById('video-players').querySelectorAll('.video-player-toggle-item').forEach(el => {
+            if (!el.classList.contains("d-none")) {
+                players.push(el.innerText.trim().toLowerCase());
+            }
+        });
+
+        return players;
+    });
+
     // Find iframe
     let frame = null;
 
     while (!frame) {
-        frame = page.frames().find(frame => {
-            return frame.url().includes("embed");
+        page.frames().find(f => {
+            players.forEach(p => {
+                if (f.url().includes(p)) {
+                    frame = f;
+                }
+            });
         });
         await sleep(100)
     }
-    await frame.waitForSelector(".vjs-big-play-button");
-    let playButton = await frame.$(".vjs-big-play-button");
 
     // Select translation
     const translationFound = await page.evaluate((translation) => {
@@ -195,15 +233,15 @@ const stream = async (url, player, translation) => {
         return failureResponse(`Translation ${translation} not found`);
     }
 
-    await page.waitForFunction(() => {
-        return !document.getElementById('loader-loading-player');
-    });
-
     // Iframe updated, find new
     frame = null;
     while (!frame) {
-        frame = page.frames().find(frame => {
-            return frame.url().includes(player.toLowerCase());
+        page.frames().find(f => {
+            players.forEach(p => {
+                if (f.url().includes(p)) {
+                    frame = f;
+                }
+            });
         });
         await sleep(100)
     }
@@ -233,13 +271,19 @@ const stream = async (url, player, translation) => {
     // Iframe updated, find new
     frame = null;
     while (!frame) {
-        frame = page.frames().find(frame => {
-            return frame.url().includes(player.toLowerCase());
+        page.frames().find(f => {
+            players.forEach(p => {
+                if (f.url().includes(p)) {
+                    frame = f;
+                }
+            });
         });
-        await sleep(100)
+        await sleep(100);
     }
 
-    playButton = await frame.$(".vjs-big-play-button");
+    await sleep(500);
+
+    let playButton = await frame.$(".vjs-big-play-button");
     if (!playButton) {
         playButton = await frame.$(".play_button");
     }
