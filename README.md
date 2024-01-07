@@ -6,9 +6,6 @@
 </p>
 <p align="center">API client for <a href="https://animego.org/" target="_blank">animego</a></p>
 
-| 📖 [Documentation] |
-| ------------------ |
-
 <p align="center">
  <a href="https://npmjs.com/package/animego-api">
    <img src="https://img.shields.io/npm/v/animego-api?label=version&logo=npm&color=ligthgreen" alt="Version">
