@@ -1,12 +1,19 @@
 const axios = require('axios');
 const nodeHtmlParser = require('node-html-parser');
-const puppeteer = require("puppeteer-core")
-const chromium = require("@sparticuz/chromium")
-
-const baseUrl = "https://animego.org";
+const puppeteer = require('puppeteer-extra');
+// Adblock setup
+const { DEFAULT_INTERCEPT_RESOLUTION_PRIORITY } = require('puppeteer');
+const AdblockerPlugin = require('puppeteer-extra-plugin-adblocker')
+puppeteer.use(
+    AdblockerPlugin({
+        blockTrackers: true,
+        interceptResolutionPriority: DEFAULT_INTERCEPT_RESOLUTION_PRIORITY
+    })
+)
+// Adblock setup end
 
 const search = async (query) => {
-    const response = await axios.get(`${baseUrl}/search/all?q=${query}`);
+    const response = await axios.get(`https://animego.org/search/all?q=${query}`);
 
     if (response.status !== 200) {
         return failureResponse("Can't load search page");
@@ -92,218 +99,231 @@ const info = async (url) => {
     return successResponse(result);
 }
 
-const streamInfo = async (url) => {
-    const browser = await puppeteer.launch({
-        executablePath:
-            process.env.CHROME_EXECUTABLE_PATH || (await chromium.executablePath()),
-        headless: true,
-        args: [
-            "--no-sandbox",
-            "--disable-setuid-sandbox",
-            "--disable-dev-shm-usage",
-            "--single-process",
-        ],
-        ignoreDefaultArgs: ["--disable-extensions"],
-        ignoreHTTPSErrors: true,
-    });
-    const page = await browser.newPage();
+const streamInfo = async (url, proxyServer = null, emergencyCloseInMs = 10000, headless = 1) => {
+    try {
+        const browser = await puppeteer.launch({
+            args: proxyServer ? [`--proxy-server=${proxyServer}`] : [],
+            headless: 1,
+        });
+        const page = await browser.newPage();
 
-    // Set screen size
-    await page.setViewport({width: 1920, height: 1080});
+        const emergencyClose = setupEmergencyClose(page, browser, emergencyCloseInMs);
 
-    // Navigate the page to a URL
-    await page.goto(url);
-    await page.waitForFunction(() => {
-        document.querySelector('.video-player-online').scrollIntoView();
-        return document.readyState === "complete" && !document.getElementById('loader-loading-player')
-    });
+        // Set screen size
+        await page.setViewport({width: 1920, height: 1080});
 
-    const translations = await page.evaluate(() => {
-        let translations = [];
-        document.getElementById('video-dubbing').querySelectorAll('.video-player-toggle-item').forEach(el => {
-            translations.push(el.innerText.trim());
+        // Navigate the page to a URL
+        await page.goto(url);
+        await page.waitForFunction(() => {
+            document.querySelector('.video-player-online').scrollIntoView();
+            return !document.getElementById('loader-loading-player')
         });
 
-        return translations;
-    });
+        const translations = await page.evaluate(() => {
+            let translations = [];
+            document.getElementById('video-dubbing').querySelectorAll('.video-player-toggle-item').forEach(el => {
+                translations.push(el.innerText.trim());
+            });
 
-    const players = await page.evaluate(() => {
-        let players = [];
-        document.getElementById('video-players').querySelectorAll('.video-player-toggle-item').forEach(el => {
-            if (!el.classList.contains("d-none")) {
-                players.push(el.innerText.trim());
-            }
+            return translations;
         });
 
-        return players;
-    });
+        const players = await page.evaluate(() => {
+            let players = [];
+            document.getElementById('video-players').querySelectorAll('.video-player-toggle-item').forEach(el => {
+                if (!el.classList.contains("d-none")) {
+                    players.push(el.innerText.trim());
+                }
+            });
 
-    await browser.close();
+            return players;
+        });
 
-    return successResponse({players, translations})
+        await browser.close();
+
+        clearTimeout(emergencyClose);
+
+        return successResponse({players, translations})
+    } catch (e) {
+        return failureResponse(e.message)
+    }
 }
 
-const stream = async (url, player, translation) => {
-    const browser = await puppeteer.launch({
-        executablePath:
-            process.env.CHROME_EXECUTABLE_PATH || (await chromium.executablePath()),
-        headless: true,
-        args: [
-            "--no-sandbox",
-            "--disable-setuid-sandbox",
-            "--disable-dev-shm-usage",
-            "--single-process",
-        ],
-        ignoreDefaultArgs: ["--disable-extensions"],
-        ignoreHTTPSErrors: true,
-    });
-    const page = await browser.newPage();
-    let stream = null;
-
-    // Set screen size
-    await page.setViewport({width: 1920, height: 1080});
-
-    // Get stream url
-    await page.setRequestInterception(true);
-
-    // Listen to the 'request' event
-    page.on('request', (request) => {
-        // Allow all requests to continue
-        request.continue();
-    });
-
-    // Listen to the 'response' event
-    page.on('response', async (response) => {
-        const url = response.url();
-        const extension = url.split('.').pop(); // Extract file extension
-
-        // Store the response
-        if (extension === "mpd" || extension === "m3u8") {
-            stream = url;
-        }
-    });
-
-    // Navigate the page to a URL
-    await page.goto(url);
-    await page.waitForFunction(() => {
-        document.querySelector('.video-player-online').scrollIntoView();
-        return document.readyState === "complete" && !document.getElementById('loader-loading-player');
-    });
-
-    const players = await page.evaluate(() => {
-        let players = [];
-        document.getElementById('video-players').querySelectorAll('.video-player-toggle-item').forEach(el => {
-            if (!el.classList.contains("d-none")) {
-                players.push(el.innerText.trim().toLowerCase());
-            }
-        });
-
-        return players;
-    });
-
-    // Find iframe
-    let frame = null;
-
-    while (!frame) {
-        page.frames().find(f => {
-            players.forEach(p => {
-                if (f.url().includes(p)) {
-                    frame = f;
-                }
-            });
-        });
-        await sleep(100)
-    }
-
-    // Select translation
-    const translationFound = await page.evaluate((translation) => {
-        let found = false;
-        document.getElementById('video-dubbing').querySelectorAll('.video-player-toggle-item').forEach(el => {
-            if (el.innerText.trim().toLowerCase() === translation.toLowerCase()) {
-                el.click();
-                found = true;
-            }
-        });
-
-        return found;
-    }, translation);
-
-    if (!translationFound) {
+const setupEmergencyClose = (page, browser, emergencyCloseInMs) => {
+    return setTimeout(async () => {
+        await page.close();
         await browser.close();
-        return failureResponse(`Translation ${translation} not found`);
-    }
+    }, emergencyCloseInMs)
+}
 
-    // Iframe updated, find new
-    frame = null;
-    while (!frame) {
-        page.frames().find(f => {
-            players.forEach(p => {
-                if (f.url().includes(p)) {
-                    frame = f;
+const stream = async (url, part, player, translation, proxyServer = null, emergencyCloseInMs = 10000) => {
+    try {
+        const browser = await puppeteer.launch({
+            args: proxyServer ? [`--proxy-server=${proxyServer}`] : [],
+            headless: 1,
+        });
+        const page = await browser.newPage();
+
+        const emergencyClose = setupEmergencyClose(page, browser, emergencyCloseInMs);
+
+        let stream = null;
+
+        // Set screen size
+        await page.setViewport({width: 1920, height: 1080});
+
+        // Get stream url
+        await page.setRequestInterception(true);
+
+        // Listen to the 'response' event
+        page.on('response', async (response) => {
+            const url = response.url();
+            const extension = url.split('.').pop(); // Extract file extension
+
+            // Store the response
+            if (extension === "mpd" || extension === "m3u8") {
+                stream = url;
+            }
+        });
+
+        // Navigate the page to a URL
+        await page.goto(url);
+        await page.waitForFunction(() => {
+            document.querySelector('.video-player-online').scrollIntoView();
+            return !document.getElementById('loader-loading-player');
+        });
+
+        await page.evaluate((part) => {
+            document.querySelector(`[data-episode="${part}"]`).click();
+        }, part);
+
+        await sleep(100);
+
+        const players = await page.evaluate(() => {
+            let players = [];
+            document.getElementById('video-players').querySelectorAll('.video-player-toggle-item').forEach(el => {
+                if (!el.classList.contains("d-none")) {
+                    players.push(el.innerText.trim().toLowerCase());
                 }
             });
+
+            return players;
         });
-        await sleep(100)
-    }
 
-    // Select player
-    const playerFound = await page.evaluate((player) => {
-        document.getElementById("video-players-tab").click();
+        // Find iframe
+        let frame = null;
 
-        let found = false;
-        document.getElementById('video-players').querySelectorAll('.video-player-toggle-item').forEach(el => {
-            if (!el.classList.contains("d-none")) {
-                if (el.innerText.trim().toLowerCase() === player.toLowerCase()) {
+        while (!frame) {
+            page.frames().find(f => {
+                players.forEach(p => {
+                    if (f.url().includes(p)) {
+                        frame = f;
+                    }
+                });
+            });
+            await sleep(100)
+        }
+
+        // Select translation
+        const translationFound = await page.evaluate((translation) => {
+            let found = false;
+            document.getElementById('video-dubbing').querySelectorAll('.video-player-toggle-item').forEach(el => {
+                if (el.innerText.trim().toLowerCase() === translation.toLowerCase()) {
                     el.click();
                     found = true;
                 }
-            }
-        });
+            });
 
-        return found;
-    }, player);
+            return found;
+        }, translation);
 
-    if (!playerFound) {
-        await browser.close();
-        return failureResponse(`Player ${player} not found`);
-    }
+        if (!translationFound) {
+            await browser.close();
+            return failureResponse(`Translation ${translation} not found`);
+        }
 
-    // Iframe updated, find new
-    frame = null;
-    while (!frame) {
-        page.frames().find(f => {
-            players.forEach(p => {
-                if (f.url().includes(p)) {
-                    frame = f;
+        // Iframe updated, find new
+        frame = null;
+        while (!frame) {
+            page.frames().find(f => {
+                players.forEach(p => {
+                    if (f.url().includes(p)) {
+                        frame = f;
+                    }
+                });
+            });
+            await sleep(100)
+        }
+
+        // Select player
+        const playerFound = await page.evaluate((player) => {
+            document.getElementById("video-players-tab").click();
+
+            let found = false;
+            document.getElementById('video-players').querySelectorAll('.video-player-toggle-item').forEach(el => {
+                if (!el.classList.contains("d-none")) {
+                    if (el.innerText.trim().toLowerCase() === player.toLowerCase()) {
+                        el.click();
+                        found = true;
+                    }
                 }
             });
-        });
+
+            return found;
+        }, player);
+
+        if (!playerFound) {
+            await browser.close();
+            return failureResponse(`Player ${player} not found`);
+        }
+
+        // Iframe updated, find new
+        frame = null;
+        while (!frame) {
+            page.frames().find(f => {
+                players.forEach(p => {
+                    if (f.url().includes(p)) {
+                        frame = f;
+                    }
+                });
+            });
+            await sleep(100);
+        }
+
+        await sleep(250);
+
+        // Remove 18+ confirmation
+        try {
+            await page.$eval('.overlay-censored', el => el.remove());
+        } catch (e) {
+            // pass
+        }
+
         await sleep(100);
-    }
 
-    await sleep(500);
+        let playButton = await frame.$(".vjs-big-play-button");
+        if (!playButton) {
+            playButton = await frame.$(".play_button");
+        }
 
-    await page.$eval('.overlay-censored', el => el.remove());
+        await playButton.click();
 
-    let playButton = await frame.$(".vjs-big-play-button");
-    if (!playButton) {
-        playButton = await frame.$(".play_button");
-    }
+        let tries = 0;
+        while (!stream && tries < 100) {
+            await sleep(100);
+            tries++;
+        }
 
-    await playButton.click();
+        await browser.close();
 
-    let tries = 0;
-    while (!stream && tries < 1000) {
-        await sleep(100);
-        tries++;
-    }
+        clearTimeout(emergencyClose);
 
-    await browser.close();
-
-    if (stream) {
-        return successResponse(stream);
-    } else {
-        return failureResponse("Stream not found");
+        if (stream) {
+            return successResponse(stream);
+        } else {
+            return failureResponse("Stream not found");
+        }
+    } catch (e) {
+        return failureResponse(e.message);
     }
 }
 

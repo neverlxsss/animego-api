@@ -6,9 +6,11 @@
   "author": "sanin.tony.dev@gmail.com",
   "license": "ISC",
   "dependencies": {
-    "@sparticuz/chromium": "^119.0.2",
     "axios": "^1.6.5",
     "node-html-parser": "^6.1.12",
-    "puppeteer-core": "^21.7.0"
+    "puppeteer": "^21.7.0",
+    "puppeteer-extra": "^3.3.6",
+    "puppeteer-extra-plugin-adblocker": "^2.13.6",
+    "socks-proxy-agent": "^8.0.2"
   }
 }
